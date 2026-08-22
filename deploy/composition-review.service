@@ -1,0 +1,27 @@
+[Unit]
+Description=Composition Review blinded local operator UI
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/alu52/github/composition-review
+ExecStart=/usr/bin/node /home/alu52/github/composition-review/src/server.mjs
+Environment=COMPOSITION_REVIEW_HOST=127.0.0.1
+Environment=COMPOSITION_REVIEW_PORT=4193
+Environment=COMPOSITION_REVIEW_BUNDLE=/home/alu52/.local/state/composition-review/labnote-002/review-bundle.json
+Environment=COMPOSITION_REVIEW_KEY=/home/alu52/.local/state/composition-review/labnote-002/review-key.json
+Environment=COMPOSITION_REVIEW_STATE=/home/alu52/.local/state/composition-review/labnote-002/judgments.json
+Environment=COMPOSITION_REVIEW_TOKEN=/home/alu52/.local/state/composition-review/labnote-002/enrollment-token
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/alu52/.local/state/composition-review/labnote-002
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

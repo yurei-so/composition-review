@@ -35,3 +35,7 @@ The default address is `http://127.0.0.1:4193`. Navigate once to the owner-only
 `/enroll/<token>` URL to set the seven-day HttpOnly browser cookie.
 
 Run the dependency-free test suite with `npm test`.
+
+The checked-in user-service unit under `deploy/` is the workstation deployment
+for the Labnote 002 review. It binds only to loopback and grants write access
+only to that review's private state directory.
