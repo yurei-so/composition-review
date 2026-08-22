@@ -39,3 +39,7 @@ Run the dependency-free test suite with `npm test`.
 The checked-in user-service unit under `deploy/` is the workstation deployment
 for the Labnote 002 review. It binds only to loopback and grants write access
 only to that review's private state directory.
+
+`scripts/open-review` reads the owner-only enrollment token without printing it
+and launches the default browser. The matching desktop entry can be installed
+from `deploy/composition-review.desktop`.
