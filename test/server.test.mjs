@@ -51,4 +51,7 @@ test("server requires enrollment and withholds results until completion", async 
   const page = await fetch(base, { headers });
   assert.equal(page.status, 200);
   assert.match(page.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  const app = await (await fetch(`${base}/app.js`, { headers })).text();
+  assert.match(app, /treatment_arm/);
+  assert.doesNotMatch(app, /schema_revision|Structured revision/);
 });

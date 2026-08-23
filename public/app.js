@@ -90,20 +90,28 @@ async function choose(choice) {
 async function renderResults() {
   try {
     const results = await request("/api/results");
+    const treatment = results.treatment_arm;
+    const direct = results.preference.direct_rewrite;
+    const treatmentWins = results.preference[treatment];
+    if (typeof treatment !== "string" || !Number.isInteger(direct) || !Number.isInteger(treatmentWins)
+        || !Number.isInteger(results.preference.tie)) {
+      throw new Error("invalid_result_summary");
+    }
+    const treatmentLabel = treatment.split("_").map((word) =>
+      word.charAt(0).toUpperCase() + word.slice(1)).join(" ");
     review.classList.add("hidden"); errorPanel.classList.add("hidden"); complete.classList.remove("hidden");
     $("#progressLabel").textContent = `${results.pairs.length} / ${results.pairs.length}`;
     $("#progressBar").style.width = "100%";
     const cards = $("#resultCards"); cards.replaceChildren();
-    for (const [label, value] of [["Direct rewrite", results.preference.direct_rewrite], ["Structured revision", results.preference.schema_revision], ["Ties", results.preference.tie]]) {
+    for (const [label, value] of [["Direct rewrite", direct], [treatmentLabel, treatmentWins], ["Ties", results.preference.tie]]) {
       const card = document.createElement("div"); card.className = "result-card";
       const strong = document.createElement("strong"); strong.textContent = value;
       const span = document.createElement("span"); span.textContent = label;
       card.append(strong, span); cards.append(card);
     }
-    const direct = results.preference.direct_rewrite; const revision = results.preference.schema_revision;
-    $("#resultNote").textContent = direct === revision
+    $("#resultNote").textContent = direct === treatmentWins
       ? "The preference result is even. Review the secondary scores before drawing a conclusion."
-      : `${direct > revision ? "Direct rewrite" : "Structured revision"} received more primary preferences. Treat this small reviewed corpus as directional evidence.`;
+      : `${direct > treatmentWins ? "Direct rewrite" : treatmentLabel} received more primary preferences. Treat this small reviewed corpus as directional evidence.`;
   } catch (error) { showError(`Could not reveal completed results: ${error.message}`); }
 }
 

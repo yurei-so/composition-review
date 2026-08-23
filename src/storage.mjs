@@ -264,6 +264,7 @@ export class ReviewStore {
     return {
       format: "composition-review.results", version: 1,
       bundle_digest: this.state.bundle_digest, completed_at: this.state.completed_at,
+      treatment_arm: this.treatmentArm,
       preference, secondary_means: secondaryMeans, pairs,
     };
   }

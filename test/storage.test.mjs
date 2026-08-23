@@ -71,5 +71,6 @@ test("review supports a bounded alternate treatment arm without pre-reveal discl
   await store.commit({ pair_id: "pair-one", choice: "a" });
   await store.commit({ pair_id: "pair-two", choice: "b" });
   const results = store.results();
+  assert.equal(results.treatment_arm, "optional_editor");
   assert.equal(results.preference.direct_rewrite + results.preference.optional_editor, 2);
 });
