@@ -60,3 +60,16 @@ test("bundle changes cannot reuse judgments or reveal key", async () => {
     (error) => error.code === "invalid_review_key",
   );
 });
+
+test("review supports a bounded alternate treatment arm without pre-reveal disclosure", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "composition-review-"));
+  const { bundlePath, keyPath } = await writeFixture(directory, "optional_editor");
+  const store = await ReviewStore.open({
+    bundlePath, keyPath, statePath: join(directory, "judgments.json"),
+  });
+  assert.equal(JSON.stringify(store.session()).includes("optional_editor"), false);
+  await store.commit({ pair_id: "pair-one", choice: "a" });
+  await store.commit({ pair_id: "pair-two", choice: "b" });
+  const results = store.results();
+  assert.equal(results.preference.direct_rewrite + results.preference.optional_editor, 2);
+});

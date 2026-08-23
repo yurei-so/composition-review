@@ -56,16 +56,26 @@ function validateBundle(bundle, key) {
     pairIds.add(pair.pair_id);
   }
   const reveal = new Map();
+  const arms = new Set();
   for (const item of key.pairs) {
     if (!exactKeys(item, ["pair_id", "candidate_a_arm", "candidate_b_arm"])
         || !pairIds.has(item.pair_id) || reveal.has(item.pair_id)
         || new Set([item.candidate_a_arm, item.candidate_b_arm]).size !== 2
-        || ![item.candidate_a_arm, item.candidate_b_arm].every((arm) => ["direct_rewrite", "schema_revision"].includes(arm))) {
+        || ![item.candidate_a_arm, item.candidate_b_arm].every((arm) =>
+          typeof arm === "string" && /^[a-z0-9][a-z0-9_]{0,79}$/.test(arm))) {
       throw new ReviewError("invalid_review_reveal");
     }
+    arms.add(item.candidate_a_arm); arms.add(item.candidate_b_arm);
     reveal.set(item.pair_id, item);
   }
   if (reveal.size !== pairIds.size) throw new ReviewError("incomplete_review_reveal");
+  if (arms.size !== 2 || !arms.has("direct_rewrite")) throw new ReviewError("invalid_review_arms");
+  const treatmentArm = [...arms].find((arm) => arm !== "direct_rewrite");
+  if ([...reveal.values()].some((item) =>
+    new Set([item.candidate_a_arm, item.candidate_b_arm]).size !== 2
+    || ![item.candidate_a_arm, item.candidate_b_arm].every((arm) => arms.has(arm)))) {
+    throw new ReviewError("inconsistent_review_arms");
+  }
   const bundleDigest = digest(bundle);
   const ranked = [...bundle.pairs].sort((left, right) => {
     const leftRank = digest(`${bundleDigest}:${left.pair_id}`);
@@ -78,7 +88,7 @@ function validateBundle(bundle, key) {
   const presentedReveal = new Map();
   const presentedPairs = bundle.pairs.map((pair) => {
     const source = reveal.get(pair.pair_id);
-    const targetA = directOnA.has(pair.pair_id) ? "direct_rewrite" : "schema_revision";
+    const targetA = directOnA.has(pair.pair_id) ? "direct_rewrite" : treatmentArm;
     if (source.candidate_a_arm === targetA) {
       presentedReveal.set(pair.pair_id, source);
       return { ...pair };
@@ -93,7 +103,7 @@ function validateBundle(bundle, key) {
   return {
     bundleDigest,
     bundle: { ...bundle, pairs: presentedPairs },
-    reveal: presentedReveal,
+    reveal: presentedReveal, treatmentArm,
   };
 }
 
@@ -175,13 +185,15 @@ export class ReviewStore {
       validateSecondary(judgment.secondary);
     }
     return new ReviewStore({
-      bundle: validation.bundle, reveal: validation.reveal, state, statePath: absoluteState, now,
+      bundle: validation.bundle, reveal: validation.reveal, treatmentArm: validation.treatmentArm,
+      state, statePath: absoluteState, now,
     });
   }
 
-  constructor({ bundle, reveal, state, statePath, now }) {
+  constructor({ bundle, reveal, treatmentArm, state, statePath, now }) {
     this.bundle = bundle;
     this.reveal = reveal;
+    this.treatmentArm = treatmentArm;
     this.state = state;
     this.statePath = statePath;
     this.now = now;
@@ -223,7 +235,7 @@ export class ReviewStore {
     if (!this.state.completed_at || Object.keys(this.state.judgments).length !== this.bundle.pairs.length) {
       throw new ReviewError("review_not_complete", 409);
     }
-    const preference = { direct_rewrite: 0, schema_revision: 0, tie: 0 };
+    const preference = { direct_rewrite: 0, [this.treatmentArm]: 0, tie: 0 };
     const dimensions = {};
     const pairs = [];
     for (const pair of this.bundle.pairs) {
@@ -233,7 +245,7 @@ export class ReviewStore {
         : judgment.choice === "a" ? reveal.candidate_a_arm : reveal.candidate_b_arm;
       preference[winningArm] += 1;
       for (const [dimension, scores] of Object.entries(judgment.secondary)) {
-        const bucket = dimensions[dimension] ?? { direct_rewrite: [], schema_revision: [] };
+        const bucket = dimensions[dimension] ?? { direct_rewrite: [], [this.treatmentArm]: [] };
         bucket[reveal.candidate_a_arm].push(scores.a);
         bucket[reveal.candidate_b_arm].push(scores.b);
         dimensions[dimension] = bucket;

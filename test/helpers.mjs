@@ -10,7 +10,7 @@ function canonical(value) {
   return `{${Object.keys(value).sort().map((key) => `${canonical(key)}:${canonical(value[key])}`).join(",")}}`;
 }
 
-export function fixture() {
+export function fixture(treatmentArm = "schema_revision") {
   const bundle = {
     format: "composition-pipeline.blinded-review", version: 1,
     campaign_digest: "campaign-digest",
@@ -28,15 +28,15 @@ export function fixture() {
     campaign_digest: bundle.campaign_digest,
     review_bundle_digest: createHash("sha256").update(canonical(bundle)).digest("hex"),
     pairs: [
-      { pair_id: "pair-one", candidate_a_arm: "direct_rewrite", candidate_b_arm: "schema_revision" },
-      { pair_id: "pair-two", candidate_a_arm: "schema_revision", candidate_b_arm: "direct_rewrite" },
+      { pair_id: "pair-one", candidate_a_arm: "direct_rewrite", candidate_b_arm: treatmentArm },
+      { pair_id: "pair-two", candidate_a_arm: treatmentArm, candidate_b_arm: "direct_rewrite" },
     ],
   };
   return { bundle, key };
 }
 
-export async function writeFixture(directory) {
-  const { bundle, key } = fixture();
+export async function writeFixture(directory, treatmentArm) {
+  const { bundle, key } = fixture(treatmentArm);
   const bundlePath = `${directory}/bundle.json`; const keyPath = `${directory}/key.json`;
   await Promise.all([
     writeFile(bundlePath, JSON.stringify(bundle)), writeFile(keyPath, JSON.stringify(key)),
