@@ -15,6 +15,7 @@ const bundlePath = process.env.COMPOSITION_REVIEW_BUNDLE;
 const keyPath = process.env.COMPOSITION_REVIEW_KEY;
 const statePath = process.env.COMPOSITION_REVIEW_STATE;
 const tokenPath = process.env.COMPOSITION_REVIEW_TOKEN;
+const assetRoot = process.env.COMPOSITION_REVIEW_ASSET_ROOT;
 if (![bundlePath, keyPath, statePath, tokenPath].every((value) => value?.startsWith("/"))) {
   throw new Error("absolute review bundle, key, state, and token paths are required");
 }
@@ -33,7 +34,7 @@ async function loadToken(path) {
 }
 
 const [store, enrollmentToken] = await Promise.all([
-  ReviewStore.open({ bundlePath, keyPath, statePath }),
+  ReviewStore.open({ bundlePath, keyPath, statePath, assetRoot }),
   loadToken(tokenPath),
 ]);
 const sessionToken = createHash("sha256").update(`composition-review:${enrollmentToken}`).digest("base64url");
@@ -84,7 +85,7 @@ async function staticFile(response, pathname) {
   response.writeHead(200, {
     "content-type": type, "content-length": content.length, "cache-control": "no-store",
     "x-content-type-options": "nosniff", "referrer-policy": "no-referrer",
-    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    "content-security-policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; media-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   });
   response.end(content);
   return true;
@@ -112,6 +113,17 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === "GET" && url.pathname === "/api/session") {
       json(response, 200, store.session()); return;
+    }
+    const audioMatch = url.pathname.match(/^\/v1\/audio\/([a-z0-9][a-z0-9_-]{0,79})$/);
+    if (request.method === "GET" && audioMatch) {
+      const asset = store.audioAsset(audioMatch[1]);
+      const content = await readFile(asset.path);
+      response.writeHead(200, {
+        "content-type": asset.mediaType, "content-length": content.length,
+        "cache-control": "private, no-store", "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+      });
+      response.end(content); return;
     }
     if (request.method === "POST" && url.pathname === "/api/judgments") {
       json(response, 200, await store.commit(await body(request))); return;

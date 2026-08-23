@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { ReviewError, ReviewStore } from "../src/storage.mjs";
-import { writeFixture } from "./helpers.mjs";
+import { writeAudioFixture, writeFixture } from "./helpers.mjs";
 
 test("review stays blinded, locks judgments, resumes, then reveals", async () => {
   const directory = await mkdtemp(join(tmpdir(), "composition-review-"));
@@ -73,4 +73,34 @@ test("review supports a bounded alternate treatment arm without pre-reveal discl
   const results = store.results();
   assert.equal(results.treatment_arm, "optional_editor");
   assert.equal(results.preference.direct_rewrite + results.preference.optional_editor, 2);
+});
+
+test("audio review verifies assets, stays blinded, and reveals generic arms", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "composition-review-audio-"));
+  const { bundlePath, keyPath } = await writeAudioFixture(directory);
+  const store = await ReviewStore.open({
+    bundlePath, keyPath, assetRoot: directory, statePath: join(directory, "judgments.json"),
+  });
+  const session = store.session();
+  assert.equal(session.mode, "audio");
+  assert.equal(session.calibration_audio, "/v1/audio/clip-one");
+  assert.equal(session.pair.audio_a.startsWith("/v1/audio/"), true);
+  assert.equal(JSON.stringify(session).includes("gold_ir"), false);
+  assert.equal(store.audioAsset("clip-one").mediaType, "audio/wav");
+  await store.commit({ pair_id: "audio-pair", choice: "a", secondary: { naturalness: { a: 5, b: 3 } } });
+  const results = store.results();
+  assert.equal(results.baseline_arm, "gold_ir");
+  assert.equal(results.treatment_arm, "swapped_ir");
+  assert.equal(results.preference.gold_ir + results.preference.swapped_ir, 1);
+});
+
+test("audio review rejects tampered assets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "composition-review-audio-"));
+  const { bundlePath, keyPath } = await writeAudioFixture(directory);
+  await writeFile(join(directory, "clip-one.wav"), "tampered");
+  await assert.rejects(
+    ReviewStore.open({ bundlePath, keyPath, assetRoot: directory,
+      statePath: join(directory, "judgments.json") }),
+    (error) => error.code === "review_asset_digest_mismatch",
+  );
 });

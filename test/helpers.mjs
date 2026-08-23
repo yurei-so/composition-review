@@ -43,3 +43,33 @@ export async function writeFixture(directory, treatmentArm) {
   ]);
   return { bundlePath, keyPath, bundle, key };
 }
+
+export async function writeAudioFixture(directory) {
+  const first = Buffer.from("RIFFaudio-one"); const second = Buffer.from("RIFFaudio-two");
+  const assets = [
+    { asset_id: "clip-one", file_name: "clip-one.wav",
+      sha256: createHash("sha256").update(first).digest("hex"), media_type: "audio/wav" },
+    { asset_id: "clip-two", file_name: "clip-two.wav",
+      sha256: createHash("sha256").update(second).digest("hex"), media_type: "audio/wav" },
+  ];
+  const bundle = {
+    format: "composition-pipeline.blinded-review", version: 2,
+    campaign_digest: "audio-campaign", mode: "audio", calibration_asset: "clip-one", assets,
+    pairs: [{ pair_id: "audio-pair", case_id: "case-a", prompt_style: "listener", repetition: 0,
+      task: "Which delivery better matches the context?", draft: "The same words.",
+      candidate_a_asset: "clip-one", candidate_b_asset: "clip-two", criteria: ["naturalness"] }],
+  };
+  const key = {
+    format: "composition-pipeline.blinded-review-key", version: 2,
+    campaign_digest: bundle.campaign_digest,
+    review_bundle_digest: createHash("sha256").update(canonical(bundle)).digest("hex"),
+    baseline_arm: "gold_ir", treatment_arm: "swapped_ir",
+    pairs: [{ pair_id: "audio-pair", candidate_a_arm: "gold_ir", candidate_b_arm: "swapped_ir" }],
+  };
+  const bundlePath = `${directory}/audio-bundle.json`; const keyPath = `${directory}/audio-key.json`;
+  await Promise.all([
+    writeFile(bundlePath, JSON.stringify(bundle)), writeFile(keyPath, JSON.stringify(key)),
+    writeFile(`${directory}/clip-one.wav`, first), writeFile(`${directory}/clip-two.wav`, second),
+  ]);
+  return { bundlePath, keyPath, bundle, key, first, second };
+}

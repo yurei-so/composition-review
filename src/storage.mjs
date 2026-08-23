@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { chmod, lstat, mkdir, open, readFile, rename, stat, unlink } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 
 const CHOICES = new Set(["a", "b", "tie"]);
 const DIMENSIONS = new Set(["clarity", "fidelity", "concision", "naturalness"]);
@@ -34,23 +34,54 @@ function exactKeys(value, expected) {
 }
 
 function validateBundle(bundle, key) {
-  if (!exactKeys(bundle, ["format", "version", "campaign_digest", "pairs"])
-      || bundle.format !== "composition-pipeline.blinded-review" || bundle.version !== 1
-      || !Array.isArray(bundle.pairs) || bundle.pairs.length < 1 || bundle.pairs.length > 500) {
+  const textMode = exactKeys(bundle, ["format", "version", "campaign_digest", "pairs"])
+    && bundle.format === "composition-pipeline.blinded-review" && bundle.version === 1;
+  const audioMode = exactKeys(bundle, ["format", "version", "campaign_digest", "mode", "calibration_asset", "assets", "pairs"])
+    && bundle.format === "composition-pipeline.blinded-review" && bundle.version === 2
+    && bundle.mode === "audio" && Array.isArray(bundle.assets);
+  if ((!textMode && !audioMode) || !Array.isArray(bundle.pairs)
+      || bundle.pairs.length < 1 || bundle.pairs.length > 500) {
     throw new ReviewError("invalid_review_bundle");
   }
-  if (!exactKeys(key, ["format", "version", "campaign_digest", "review_bundle_digest", "pairs"])
-      || key.format !== "composition-pipeline.blinded-review-key" || key.version !== 1
+  const keyFields = key?.version === 2
+    ? ["format", "version", "campaign_digest", "review_bundle_digest", "baseline_arm", "treatment_arm", "pairs"]
+    : ["format", "version", "campaign_digest", "review_bundle_digest", "pairs"];
+  if (!exactKeys(key, keyFields)
+      || key.format !== "composition-pipeline.blinded-review-key"
+      || ![1, 2].includes(key.version) || key.version !== bundle.version
       || key.campaign_digest !== bundle.campaign_digest || key.review_bundle_digest !== digest(bundle)
       || !Array.isArray(key.pairs) || key.pairs.length !== bundle.pairs.length) {
     throw new ReviewError("invalid_review_key");
   }
+  const assets = new Map();
+  if (audioMode) {
+    for (const asset of bundle.assets) {
+      if (!exactKeys(asset, ["asset_id", "file_name", "sha256", "media_type"])
+          || typeof asset.asset_id !== "string" || !/^[a-z0-9][a-z0-9_-]{0,79}$/.test(asset.asset_id)
+          || assets.has(asset.asset_id) || typeof asset.file_name !== "string"
+          || basename(asset.file_name) !== asset.file_name || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(asset.file_name)
+          || !/^[a-f0-9]{64}$/.test(asset.sha256)
+          || !["audio/wav", "audio/mpeg", "audio/ogg"].includes(asset.media_type)) {
+        throw new ReviewError("invalid_review_asset");
+      }
+      assets.set(asset.asset_id, asset);
+    }
+    if (bundle.calibration_asset !== null && !assets.has(bundle.calibration_asset)) {
+      throw new ReviewError("invalid_calibration_asset");
+    }
+  }
   const pairIds = new Set();
   for (const pair of bundle.pairs) {
-    if (!exactKeys(pair, ["pair_id", "case_id", "prompt_style", "repetition", "task", "draft", "candidate_a", "candidate_b", "criteria"])
+    const expected = audioMode
+      ? ["pair_id", "case_id", "prompt_style", "repetition", "task", "draft", "candidate_a_asset", "candidate_b_asset", "criteria"]
+      : ["pair_id", "case_id", "prompt_style", "repetition", "task", "draft", "candidate_a", "candidate_b", "criteria"];
+    if (!exactKeys(pair, expected)
         || typeof pair.pair_id !== "string" || pairIds.has(pair.pair_id)
         || typeof pair.task !== "string" || typeof pair.draft !== "string"
-        || typeof pair.candidate_a !== "string" || typeof pair.candidate_b !== "string") {
+        || (audioMode
+          ? !assets.has(pair.candidate_a_asset) || !assets.has(pair.candidate_b_asset)
+            || pair.candidate_a_asset === pair.candidate_b_asset
+          : typeof pair.candidate_a !== "string" || typeof pair.candidate_b !== "string")) {
       throw new ReviewError("invalid_review_pair");
     }
     pairIds.add(pair.pair_id);
@@ -69,8 +100,10 @@ function validateBundle(bundle, key) {
     reveal.set(item.pair_id, item);
   }
   if (reveal.size !== pairIds.size) throw new ReviewError("incomplete_review_reveal");
-  if (arms.size !== 2 || !arms.has("direct_rewrite")) throw new ReviewError("invalid_review_arms");
-  const treatmentArm = [...arms].find((arm) => arm !== "direct_rewrite");
+  const baselineArm = key.version === 2 ? key.baseline_arm : "direct_rewrite";
+  const treatmentArm = key.version === 2 ? key.treatment_arm : [...arms].find((arm) => arm !== baselineArm);
+  if (arms.size !== 2 || !arms.has(baselineArm) || !arms.has(treatmentArm)
+      || baselineArm === treatmentArm) throw new ReviewError("invalid_review_arms");
   if ([...reveal.values()].some((item) =>
     new Set([item.candidate_a_arm, item.candidate_b_arm]).size !== 2
     || ![item.candidate_a_arm, item.candidate_b_arm].every((arm) => arms.has(arm)))) {
@@ -82,13 +115,13 @@ function validateBundle(bundle, key) {
     const rightRank = digest(`${bundleDigest}:${right.pair_id}`);
     return leftRank.localeCompare(rightRank);
   });
-  const directOnA = new Set(
+  const baselineOnA = new Set(
     ranked.slice(0, Math.ceil(ranked.length / 2)).map((pair) => pair.pair_id),
   );
   const presentedReveal = new Map();
   const presentedPairs = bundle.pairs.map((pair) => {
     const source = reveal.get(pair.pair_id);
-    const targetA = directOnA.has(pair.pair_id) ? "direct_rewrite" : treatmentArm;
+    const targetA = baselineOnA.has(pair.pair_id) ? baselineArm : treatmentArm;
     if (source.candidate_a_arm === targetA) {
       presentedReveal.set(pair.pair_id, source);
       return { ...pair };
@@ -98,12 +131,14 @@ function validateBundle(bundle, key) {
       candidate_a_arm: source.candidate_b_arm,
       candidate_b_arm: source.candidate_a_arm,
     });
-    return { ...pair, candidate_a: pair.candidate_b, candidate_b: pair.candidate_a };
+    return audioMode
+      ? { ...pair, candidate_a_asset: pair.candidate_b_asset, candidate_b_asset: pair.candidate_a_asset }
+      : { ...pair, candidate_a: pair.candidate_b, candidate_b: pair.candidate_a };
   });
   return {
     bundleDigest,
     bundle: { ...bundle, pairs: presentedPairs },
-    reveal: presentedReveal, treatmentArm,
+    reveal: presentedReveal, baselineArm, treatmentArm, mode: audioMode ? "audio" : "text", assets,
   };
 }
 
@@ -148,7 +183,7 @@ function validateSecondary(value) {
 }
 
 export class ReviewStore {
-  static async open({ bundlePath, keyPath, statePath, now = () => new Date() }) {
+  static async open({ bundlePath, keyPath, statePath, assetRoot, now = () => new Date() }) {
     const [bundleInfo, keyInfo] = await Promise.all([stat(bundlePath), stat(keyPath)]);
     if (!bundleInfo.isFile() || !keyInfo.isFile()) throw new ReviewError("review_sources_must_be_files");
     const [bundle, key] = await Promise.all([
@@ -156,6 +191,24 @@ export class ReviewStore {
       readFile(keyPath, "utf8").then(JSON.parse),
     ]);
     const validation = validateBundle(bundle, key);
+    const audioAssets = new Map();
+    if (validation.mode === "audio") {
+      if (typeof assetRoot !== "string" || !assetRoot.startsWith("/")) {
+        throw new ReviewError("absolute_audio_asset_root_required");
+      }
+      const root = resolve(assetRoot);
+      for (const [assetId, asset] of validation.assets) {
+        const path = resolve(root, asset.file_name);
+        if (!path.startsWith(`${root}/`)) throw new ReviewError("unsafe_review_asset_path");
+        const info = await lstat(path);
+        if (!info.isFile() || info.isSymbolicLink()) throw new ReviewError("unsafe_review_asset");
+        const content = await readFile(path);
+        if (createHash("sha256").update(content).digest("hex") !== asset.sha256) {
+          throw new ReviewError("review_asset_digest_mismatch");
+        }
+        audioAssets.set(assetId, { path, mediaType: asset.media_type, size: info.size });
+      }
+    }
     const absoluteState = resolve(statePath);
     let state;
     try {
@@ -185,15 +238,19 @@ export class ReviewStore {
       validateSecondary(judgment.secondary);
     }
     return new ReviewStore({
-      bundle: validation.bundle, reveal: validation.reveal, treatmentArm: validation.treatmentArm,
-      state, statePath: absoluteState, now,
+      bundle: validation.bundle, reveal: validation.reveal,
+      baselineArm: validation.baselineArm, treatmentArm: validation.treatmentArm,
+      mode: validation.mode, audioAssets, state, statePath: absoluteState, now,
     });
   }
 
-  constructor({ bundle, reveal, treatmentArm, state, statePath, now }) {
+  constructor({ bundle, reveal, baselineArm, treatmentArm, mode, audioAssets, state, statePath, now }) {
     this.bundle = bundle;
     this.reveal = reveal;
+    this.baselineArm = baselineArm;
     this.treatmentArm = treatmentArm;
+    this.mode = mode;
+    this.audioAssets = audioAssets;
     this.state = state;
     this.statePath = statePath;
     this.now = now;
@@ -202,15 +259,30 @@ export class ReviewStore {
   session() {
     const completed = Object.keys(this.state.judgments).length;
     const pair = this.bundle.pairs.find((item) => !Object.hasOwn(this.state.judgments, item.pair_id));
+    const pairView = !pair ? null : this.mode === "audio" ? {
+      pair_id: pair.pair_id, task: pair.task, draft: pair.draft, criteria: pair.criteria,
+      audio_a: `/v1/audio/${encodeURIComponent(pair.candidate_a_asset)}`,
+      audio_b: `/v1/audio/${encodeURIComponent(pair.candidate_b_asset)}`,
+    } : {
+      pair_id: pair.pair_id, task: pair.task, draft: pair.draft, criteria: pair.criteria,
+      response_a: pair.candidate_a, response_b: pair.candidate_b,
+    };
     return {
       format: "composition-review.session", version: 1,
+      mode: this.mode,
+      calibration_audio: this.mode === "audio" && this.bundle.calibration_asset
+        ? `/v1/audio/${encodeURIComponent(this.bundle.calibration_asset)}` : null,
       progress: { completed, total: this.bundle.pairs.length },
       complete: !pair,
-      pair: pair ? {
-        pair_id: pair.pair_id, task: pair.task, draft: pair.draft,
-        response_a: pair.candidate_a, response_b: pair.candidate_b,
-      } : null,
+      pair: pairView,
     };
+  }
+
+  audioAsset(assetId) {
+    if (this.mode !== "audio" || !this.audioAssets.has(assetId)) {
+      throw new ReviewError("audio_asset_not_found", 404);
+    }
+    return this.audioAssets.get(assetId);
   }
 
   async commit({ pair_id: pairId, choice, secondary }) {
@@ -235,7 +307,7 @@ export class ReviewStore {
     if (!this.state.completed_at || Object.keys(this.state.judgments).length !== this.bundle.pairs.length) {
       throw new ReviewError("review_not_complete", 409);
     }
-    const preference = { direct_rewrite: 0, [this.treatmentArm]: 0, tie: 0 };
+    const preference = { [this.baselineArm]: 0, [this.treatmentArm]: 0, tie: 0 };
     const dimensions = {};
     const pairs = [];
     for (const pair of this.bundle.pairs) {
@@ -245,7 +317,7 @@ export class ReviewStore {
         : judgment.choice === "a" ? reveal.candidate_a_arm : reveal.candidate_b_arm;
       preference[winningArm] += 1;
       for (const [dimension, scores] of Object.entries(judgment.secondary)) {
-        const bucket = dimensions[dimension] ?? { direct_rewrite: [], [this.treatmentArm]: [] };
+        const bucket = dimensions[dimension] ?? { [this.baselineArm]: [], [this.treatmentArm]: [] };
         bucket[reveal.candidate_a_arm].push(scores.a);
         bucket[reveal.candidate_b_arm].push(scores.b);
         dimensions[dimension] = bucket;
@@ -264,7 +336,7 @@ export class ReviewStore {
     return {
       format: "composition-review.results", version: 1,
       bundle_digest: this.state.bundle_digest, completed_at: this.state.completed_at,
-      treatment_arm: this.treatmentArm,
+      baseline_arm: this.baselineArm, treatment_arm: this.treatmentArm,
       preference, secondary_means: secondaryMeans, pairs,
     };
   }
