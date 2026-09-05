@@ -1,5 +1,11 @@
 # Composition Review
 
+> [!NOTE]
+> **Archived for organizational consolidation.** This repository's history and
+> maintained research apparatus now live in
+> [`yurei-so/research`](https://github.com/yurei-so/research/tree/main/apparatus/composition-review).
+> The move preserves the tool's privacy and review-integrity requirements.
+
 A small, owner-local blinded A/B review surface for text and audio experiment
 bundles.
 
